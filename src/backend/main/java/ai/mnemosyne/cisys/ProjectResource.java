@@ -49,6 +49,8 @@ public class ProjectResource {
   @Inject SecurityIdentity identity;
   @Inject RepositoryUrlValidator repositoryUrls;
   @Inject RepositoryMirror mirrors;
+
+  @Inject ProjectCache caches;
   @Inject ProjectAccess access;
   @Inject AuditService audit;
 
@@ -82,7 +84,7 @@ public class ProjectResource {
     }
   }
 
-  private static final Pattern NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}");
+  static final Pattern NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}");
   static final String NAME_RULE =
       "Project names use letters, digits, '.', '_' and '-', and start with a letter or digit";
 
@@ -98,9 +100,13 @@ public class ProjectResource {
   public record CreateProject(
       String name, String repositoryUrl, boolean privateRepository, String credentialRef) {}
 
-  /** The new values of a project. */
+  /** The new values of a project. A null {@code cache}, from an older client, keeps it. */
   public record UpdateProject(
-      String name, String repositoryUrl, boolean privateRepository, String credentialRef) {}
+      String name,
+      String repositoryUrl,
+      boolean privateRepository,
+      String credentialRef,
+      Boolean cache) {}
 
   /** A project's credential reference. */
   public record Credential(String credentialRef) {}
@@ -116,7 +122,8 @@ public class ProjectResource {
       boolean privateRepository,
       boolean owned,
       @JsonInclude(JsonInclude.Include.NON_NULL) String ownerSubject,
-      String credentialRef) {}
+      String credentialRef,
+      boolean cache) {}
 
   private ProjectResponse response(Project p) {
     return new ProjectResponse(
@@ -126,7 +133,8 @@ public class ProjectResource {
         p.privateRepository,
         subject().equals(p.ownerSubject),
         identity.hasRole("admin") ? p.ownerSubject : null,
-        identity.hasRole("admin") ? p.credentialRef : null);
+        identity.hasRole("admin") ? p.credentialRef : null,
+        p.cache);
   }
 
   /** The signed-in user's name, subject and roles. */
@@ -354,6 +362,7 @@ public class ProjectResource {
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
+    caches.delete(id);
     if (locked) {
       try {
         mirrors.delete(id);
@@ -429,6 +438,9 @@ public class ProjectResource {
     p.name = name;
     p.repositoryUrl = url;
     p.privateRepository = input.privateRepository();
+    if (input.cache() != null) {
+      p.cache = input.cache();
+    }
     if (admin) {
       p.credentialRef = credential(input.privateRepository(), input.credentialRef());
     } else if (urlChanged || !input.privateRepository()) {
@@ -445,6 +457,7 @@ public class ProjectResource {
       ProjectPullRequest.delete("projectId", id);
       p.pullRequestProvider = null;
       p.pullRequestBaseline = null;
+      caches.delete(id);
     }
     java.util.List<String> changed = new java.util.ArrayList<>();
     if (!Objects.equals(previousName, p.name)) {
